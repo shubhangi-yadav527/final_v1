@@ -35,7 +35,24 @@ export default function HomeDashboard() {
   // 9 Widgets Data State
   const [governanceScore, setGovernanceScore] = useState({ score: 97, status: 'Excellent', trend: '↑ +2% from last month' });
   const [riskData, setRiskData] = useState({ overall_risk: 9, risk_level: 'Low' });
-  const [activeRegulations, setActiveRegulations] = useState(18);
+  const [activeRegulations, setActiveRegulations] = useState(() => {
+    try {
+      const cached = localStorage.getItem('db_regulatory_pulse_regulations_count');
+      return cached ? parseInt(cached, 10) : 12;
+    } catch (e) {
+      console.error('Failed to load regulations count cache:', e);
+      return 12;
+    }
+  });
+  const [regulationsBreakdown, setRegulationsBreakdown] = useState(() => {
+    try {
+      const cached = localStorage.getItem('db_regulatory_pulse_regulations_breakdown');
+      return cached ? JSON.parse(cached) : { high: 10, compliant: 0, pending: 2 };
+    } catch (e) {
+      console.error('Failed to load regulations breakdown cache:', e);
+      return { high: 10, compliant: 0, pending: 2 };
+    }
+  });
   const [alerts, setAlerts] = useState({ total_alerts: 4, high_priority: [] });
   const [carbonImpact, setCarbonImpact] = useState({ current_co2: 31, reduction_percentage: 40 });
   const [aiConfidence] = useState('High');
@@ -85,8 +102,23 @@ export default function HomeDashboard() {
       }
 
       try {
-        const regRes = await axios.get(`${BACKEND_URL}/api/regulations/count`);
-        setActiveRegulations(regRes.data.count);
+        const regsRes = await axios.get(`${BACKEND_URL}/api/regulations`);
+        const regs = regsRes.data.regulations || [];
+        const count = regs.length;
+        setActiveRegulations(count);
+        
+        const high = regs.filter(r => r.severity === 'high').length;
+        const compliant = regs.filter(r => r.severity === 'compliant').length;
+        const pending = regs.filter(r => r.severity === 'medium' || r.severity === 'pending').length;
+        const breakdown = { high, compliant, pending };
+        setRegulationsBreakdown(breakdown);
+        
+        try {
+          localStorage.setItem('db_regulatory_pulse_regulations_count', count.toString());
+          localStorage.setItem('db_regulatory_pulse_regulations_breakdown', JSON.stringify(breakdown));
+        } catch (storageError) {
+          console.warn('Failed to save regulations cache:', storageError);
+        }
       } catch (e) {
         console.warn("HomeDashboard: failed to fetch regulations:", e.message);
       }
@@ -479,7 +511,7 @@ export default function HomeDashboard() {
             {/* Status Breakdown Pills */}
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', my: 1 }}>
               <Chip
-                label="4 High Priority"
+                label={`${regulationsBreakdown.high} High Priority`}
                 size="small"
                 sx={{
                   bgcolor: 'rgba(239, 68, 68, 0.12)',
@@ -491,7 +523,7 @@ export default function HomeDashboard() {
                 }}
               />
               <Chip
-                label="11 Compliant"
+                label={`${regulationsBreakdown.compliant} Compliant`}
                 size="small"
                 sx={{
                   bgcolor: 'rgba(16, 185, 129, 0.12)',
@@ -503,7 +535,7 @@ export default function HomeDashboard() {
                 }}
               />
               <Chip
-                label="3 Pending"
+                label={`${regulationsBreakdown.pending} Pending`}
                 size="small"
                 sx={{
                   bgcolor: 'rgba(245, 158, 11, 0.12)',

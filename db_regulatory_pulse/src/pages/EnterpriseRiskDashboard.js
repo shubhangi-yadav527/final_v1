@@ -24,17 +24,36 @@ export default function EnterpriseRiskDashboard() {
     'EBA Guidelines': ['Compliance Risk']
   };
 
-  const [riskData, setRiskData] = useState({
-    overall_risk: 8,
-    risk_level: 'Low',
-    categories: [
-      { category: 'Compliance Risk', percentage: 10, color: 'warning' },
-      { category: 'Reputational Risk', percentage: 12, color: 'warning' },
-      { category: 'Operational Risk', percentage: 8, color: 'warning' },
-      { category: 'Market Risk', percentage: 10, color: 'warning' },
-      { category: 'Credit Risk', percentage: 3, color: 'success' },
-      { category: 'Legal&Regulatory Risk', percentage: 5, color: 'success' }
-    ]
+  const [riskData, setRiskData] = useState(() => {
+    try {
+      const cached = localStorage.getItem('db_regulatory_pulse_risk_metrics');
+      return cached ? JSON.parse(cached) : {
+        overall_risk: 8,
+        risk_level: 'Low',
+        categories: [
+          { category: 'Compliance Risk', percentage: 10, color: 'warning' },
+          { category: 'Reputational Risk', percentage: 12, color: 'warning' },
+          { category: 'Operational Risk', percentage: 8, color: 'warning' },
+          { category: 'Market Risk', percentage: 10, color: 'warning' },
+          { category: 'Credit Risk', percentage: 3, color: 'success' },
+          { category: 'Legal&Regulatory Risk', percentage: 5, color: 'success' }
+        ]
+      };
+    } catch (e) {
+      console.error('Failed to load risk metrics cache:', e);
+      return {
+        overall_risk: 8,
+        risk_level: 'Low',
+        categories: [
+          { category: 'Compliance Risk', percentage: 10, color: 'warning' },
+          { category: 'Reputational Risk', percentage: 12, color: 'warning' },
+          { category: 'Operational Risk', percentage: 8, color: 'warning' },
+          { category: 'Market Risk', percentage: 10, color: 'warning' },
+          { category: 'Credit Risk', percentage: 3, color: 'success' },
+          { category: 'Legal&Regulatory Risk', percentage: 5, color: 'success' }
+        ]
+      };
+    }
   });
 
   const getMappedRisks = () => {
@@ -74,31 +93,38 @@ export default function EnterpriseRiskDashboard() {
           const data = await response.json();
           console.log('EnterpriseRiskDashboard: Received BQ data:', data);
           setRiskData(data);
+          try {
+            localStorage.setItem('db_regulatory_pulse_risk_metrics', JSON.stringify(data));
+          } catch (storageError) {
+            console.warn('Failed to save risk metrics to cache:', storageError);
+          }
         } else {
           console.error('EnterpriseRiskDashboard: API response error status:', response.status);
-          setRiskData({
+          setRiskData(prev => (prev && prev.categories && prev.categories.length > 0) ? prev : {
             overall_risk: 9,
             risk_level: 'Low',
             categories: [
-              { category: 'Basel III / CRR / CRD Risk', percentage: 12, color: 'warning' },
-              { category: 'DORA Risk', percentage: 11, color: 'warning' },
-              { category: 'EBA Guidelines Risk', percentage: 10, color: 'warning' },
-              { category: 'GDPR Risk', percentage: 9, color: 'warning' },
-              { category: 'EU AI Act Risk', percentage: 5, color: 'success' }
+              { category: 'Compliance Risk', percentage: 10, color: 'warning' },
+              { category: 'Reputational Risk', percentage: 12, color: 'warning' },
+              { category: 'Operational Risk', percentage: 8, color: 'warning' },
+              { category: 'Market Risk', percentage: 10, color: 'warning' },
+              { category: 'Credit Risk', percentage: 3, color: 'success' },
+              { category: 'Legal&Regulatory Risk', percentage: 5, color: 'success' }
             ]
           });
         }
       } catch (err) {
         console.error('EnterpriseRiskDashboard: Fetch error:', err);
-        setRiskData({
+        setRiskData(prev => (prev && prev.categories && prev.categories.length > 0) ? prev : {
           overall_risk: 9,
           risk_level: 'Low',
           categories: [
-            { category: 'Basel III / CRR / CRD Risk', percentage: 12, color: 'warning' },
-            { category: 'DORA Risk', percentage: 11, color: 'warning' },
-            { category: 'EBA Guidelines Risk', percentage: 10, color: 'warning' },
-            { category: 'GDPR Risk', percentage: 9, color: 'warning' },
-            { category: 'EU AI Act Risk', percentage: 5, color: 'success' }
+            { category: 'Compliance Risk', percentage: 10, color: 'warning' },
+            { category: 'Reputational Risk', percentage: 12, color: 'warning' },
+            { category: 'Operational Risk', percentage: 8, color: 'warning' },
+            { category: 'Market Risk', percentage: 10, color: 'warning' },
+            { category: 'Credit Risk', percentage: 3, color: 'success' },
+            { category: 'Legal&Regulatory Risk', percentage: 5, color: 'success' }
           ]
         });
       }
