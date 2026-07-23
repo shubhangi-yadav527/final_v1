@@ -1,0 +1,108 @@
+name: frontend-hosting
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'RegulatoryAI/src/**'
+      - 'RegulatoryAI/public/**'
+      - 'RegulatoryAI/package.json'
+      - 'RegulatoryAI/package-lock.json'
+      - 'RegulatoryAI/Dockerfile.frontend'
+      - '.github/workflows/frontend-hosting.yml'
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  GAR_LOCATION: ${{ vars.GCP_REGION || 'us-central1' }}
+  GAR_REPOSITORY: ${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY || 'regulatoryai' }}
+  SERVICE_NAME: ${{ vars.GCP_FRONTEND_SERVICE_NAME || 'regulatoryai-frontend' }}
+  REACT_APP_BACKEND_URL: ${{ vars.REACT_APP_BACKEND_URL || '' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate required variables
+        run: |
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "ERROR: GCP_PROJECT_ID repository variable is not set."
+            echo "Go to Settings > Secrets and variables > Actions > Variables and add GCP_PROJECT_ID."
+            exit 1
+          fi
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Validate Google auth inputs
+        id: auth-check
+        run: |
+          if [ -n "$GCP_CREDENTIALS_JSON" ]; then
+            echo "Using GCP credentials JSON secret"
+            echo "method=credentials_json" >> "$GITHUB_OUTPUT"
+          elif [ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ]; then
+            echo "Using workload identity provider"
+            echo "method=workload_identity" >> "$GITHUB_OUTPUT"
+          else
+            echo "Set either the GCP_CREDENTIALS_JSON secret or the GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT variables."
+            exit 1
+          fi
+        env:
+          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Authenticate to Google Cloud with credentials JSON
+        if: steps.auth-check.outputs.method == 'credentials_json'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Authenticate to Google Cloud with workload identity
+        if: steps.auth-check.outputs.method == 'workload_identity'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          if ! gcloud artifacts repositories describe "${{ env.GAR_REPOSITORY }}" \
+            --location="${{ env.GAR_LOCATION }}" \
+            --project="${{ env.PROJECT_ID }}" >/dev/null 2>&1; then
+            gcloud artifacts repositories create "${{ env.GAR_REPOSITORY }}" \
+              --repository-format=docker \
+              --location="${{ env.GAR_LOCATION }}" \
+              --project="${{ env.PROJECT_ID }}"
+          fi
+
+      - name: Build and push frontend image
+        working-directory: RegulatoryAI
+        run: |
+          IMAGE_URI="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/frontend:${{ github.sha }}"
+          docker build -f Dockerfile.frontend -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          IMAGE_URI="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/frontend:${{ github.sha }}"
+          gcloud run deploy "${{ env.SERVICE_NAME }}" \
+            --image="$IMAGE_URI" \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --project=${{ env.PROJECT_ID }} \
+            --set-env-vars REACT_APP_BACKEND_URL="${{ env.REACT_APP_BACKEND_URL }}"
