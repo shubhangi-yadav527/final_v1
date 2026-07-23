@@ -1,0 +1,5 @@
+{
+  "gcp_project": "tensile-oarlock-500904-d4",
+  "gcp_dataset": "EU_Regulations",
+  "gcp_table": "eu_regulations"
+}
