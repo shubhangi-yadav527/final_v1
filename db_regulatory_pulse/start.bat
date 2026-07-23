@@ -19,11 +19,12 @@ echo.
 REM Backend
 echo [INFO] Starting Backend...
 cd backend
-pip install -r requirements.txt > nul 2>&1
+call py -m pip install -r requirements.txt > nul 2>&1
 echo [OK] Backend dependencies installed
-start cmd /k "python main.py"
+start cmd /k "py main.py"
 echo [OK] Backend running on http://localhost:8000
 echo [OK] API docs at http://localhost:8000/docs
+
 echo.
 
 echo ===============================================================

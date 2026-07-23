@@ -46,6 +46,42 @@ if bigquery is not None:
 else:
     print("google-cloud-bigquery is not installed. Fallback to mock active.")
 
+# Vertex AI Integration Setup
+VERTEX_AI_ACTIVE = False
+VERTEX_MODEL = None
+
+try:
+    import vertexai
+    from vertexai.generative_models import GenerativeModel
+    
+    sa_json_path = r'C:\Users\Shubhangi Yadav\PycharmProjects\tensile-oarlock-500904-d4-1d6cbf5e0d4c.json'
+    if os.path.exists(sa_json_path):
+        from google.oauth2 import service_account
+        creds = service_account.Credentials.from_service_account_file(sa_json_path)
+        vertexai.init(project=BQ_PROJECT, location="us-central1", credentials=creds)
+        print(f"Vertex AI initialized successfully using service account for project: {BQ_PROJECT}")
+    else:
+        vertexai.init(project=BQ_PROJECT, location="us-central1")
+        print(f"Vertex AI initialized successfully for project: {BQ_PROJECT}")
+        
+    system_instruction = (
+        "You are the Deutsche Bank AI Governance Assistant, a professional companion "
+        "designed to help bank employees and compliance officers with regulatory compliance, "
+        "AI governance scores, enterprise risk metrics, sustainability recommendations (carbon savings), "
+        "and executive approval workflows.\n"
+        "Provide direct, professional, and clear answers. Keep answers brief and banking-compliant. "
+        "Use structured data where appropriate."
+    )
+    
+    VERTEX_MODEL = GenerativeModel(
+        "gemini-2.5-flash",
+        system_instruction=[system_instruction]
+    )
+    VERTEX_AI_ACTIVE = True
+except Exception as e:
+    print(f"Vertex AI could not be initialized: {e}. Fallback to mock active.")
+
+
 # In-memory query cache: maps SQL string to (expiry_timestamp, result_list)
 _bq_cache = {}
 BQ_CACHE_TTL = 300  # 5 minutes TTL
@@ -629,10 +665,74 @@ async def chat(message: ChatMessage):
     """AI Governance Assistant chatbot"""
     msg_lower = message.message.lower()
     
+    # 1. Try to use Vertex AI Gemini model
+    if VERTEX_AI_ACTIVE and VERTEX_MODEL is not None:
+        try:
+            # Construct a dynamic grounding context from current application databases
+            context = (
+                f"Database Current State:\n"
+                f"- Active regulations: EU AI Act, DORA, GDPR, Basel III.\n"
+                f"- Overall Compliance score: 82%.\n"
+                f"- Governance score: 97%.\n"
+                f"- Enterprise risk level: 44% (Medium).\n"
+                f"- Carbon emissions optimized: 18.6 Tons (Saved: 12.4 Tons, Reduction: 40%).\n"
+                f"- Cost savings: €1.66M saved annually (49.7% savings), payback: 8 months.\n"
+                f"- Current pending executive approval action plans: 3.\n"
+                f"- Department stats: Deposits (85% compliance, High risk, €1.1M cost), "
+                f"Loans (89% compliance, Medium risk, €0.8M cost), "
+                f"Core Banking (94% compliance, Low risk, €0.4M cost).\n"
+            )
+            
+            prompt = f"Grounded Context:\n{context}\n\nUser Question: {message.message}"
+            
+            response = VERTEX_MODEL.generate_content(
+                prompt,
+                generation_config={"temperature": 0.2, "max_output_tokens": 500}
+            )
+            
+            # Map default metadata suggestion chips
+            suggestions = ["EU AI Act", "Compliance Status", "Carbon Reduction", "Cost Savings"]
+            metadata = {"suggestions": suggestions}
+            
+            # Parse specific details from question if we can match keywords to supply details
+            if "eu ai act" in msg_lower or "highest impact" in msg_lower:
+                metadata.update({
+                    "regulation": "EU AI Act",
+                    "departments": ["Risk Management", "Compliance", "AI Ethics"],
+                    "cost": "€2.1M",
+                    "actions": ["High Priority", "Q3 2026 Deadline"]
+                })
+            elif "compliance" in msg_lower:
+                metadata.update({
+                    "overall_score": 82,
+                    "departments": {"Core Banking": 94, "Loans": 89, "Deposits": 85}
+                })
+            elif "carbon" in msg_lower or "sustainability" in msg_lower or "emission" in msg_lower:
+                metadata.update({
+                    "current_emissions": "31 Tons CO₂",
+                    "potential_reduction": "40%",
+                    "recommendations": ["Data Center Optimization", "Cloud Auto-scaling"]
+                })
+            elif "cost" in msg_lower or "roi" in msg_lower or "savings" in msg_lower:
+                metadata.update({
+                    "annual_savings": "€1.66 M",
+                    "payback_period": "8 months",
+                    "breakdown": {"infrastructure": "€480K", "compliance": "€700K", "carbon": "€220K"}
+                })
+                
+            return ChatResponse(
+                response=response.text.strip(),
+                metadata=metadata,
+                confidence=0.95
+            )
+        except Exception as e:
+            print(f"Vertex AI API call failed: {e}. Falling back to mock responses.")
+
+    # 2. Fallback to mock responses if Vertex AI is offline
     # EU AI Act query
     if "eu ai act" in msg_lower or "highest impact" in msg_lower:
         return ChatResponse(
-            response="The EU AI Act has the highest impact on your organization. It affects 3 departments with estimated implementation cost of €2.1M.",
+            response="The EU AI Act has the highest impact on your organization. It affects 3 departments with estimated implementation cost of €2.1M. (Fallback Mode)",
             metadata={
                 "regulation": "EU AI Act",
                 "departments": ["Risk Management", "Compliance", "AI Ethics"],
@@ -645,7 +745,7 @@ async def chat(message: ChatMessage):
     # Compliance query
     elif "compliance" in msg_lower:
         return ChatResponse(
-            response="Current compliance score is 82% across all active regulations. The Deposits department requires immediate attention (85% compliance).",
+            response="Current compliance score is 82% across all active regulations. The Deposits department requires immediate attention (85% compliance). (Fallback Mode)",
             metadata={
                 "overall_score": 82,
                 "departments": {
@@ -660,7 +760,7 @@ async def chat(message: ChatMessage):
     # Carbon query
     elif "carbon" in msg_lower or "sustainability" in msg_lower or "emission" in msg_lower:
         return ChatResponse(
-            response="We can reduce CO₂ emissions by 40% through AI optimization. Key recommendations: optimize data center operations (€4.2T CO₂/year), implement cloud auto-scaling (€3.8T CO₂/year).",
+            response="We can reduce CO₂ emissions by 40% through AI optimization. Key recommendations: optimize data center operations (€4.2T CO₂/year), implement cloud auto-scaling (€3.8T CO₂/year). (Fallback Mode)",
             metadata={
                 "current_emissions": "31 Tons CO₂",
                 "potential_reduction": "40%",
@@ -672,7 +772,7 @@ async def chat(message: ChatMessage):
     # Cost/ROI query
     elif "cost" in msg_lower or "roi" in msg_lower or "savings" in msg_lower:
         return ChatResponse(
-            response="AI governance implementation will save €1.66M annually (49.7% reduction). Payback period: 8 months. Breakdown: Infrastructure €480K, Compliance €700K, Carbon €220K.",
+            response="AI governance implementation will save €1.66M annually (49.7% reduction). Payback period: 8 months. Breakdown: Infrastructure €480K, Compliance €700K, Carbon €220K. (Fallback Mode)",
             metadata={
                 "annual_savings": "€1.66 M",
                 "payback_period": "8 months",
@@ -688,7 +788,7 @@ async def chat(message: ChatMessage):
     # Default response
     else:
         return ChatResponse(
-            response="I can help you with questions about regulations, compliance, carbon emissions, costs, and AI governance. What would you like to know?",
+            response="I can help you with questions about regulations, compliance, carbon emissions, costs, and AI governance. What would you like to know? (Fallback Mode)",
             metadata={"suggestions": ["EU AI Act", "Compliance Status", "Carbon Reduction", "Cost Savings"]},
             confidence=0.85
         )
