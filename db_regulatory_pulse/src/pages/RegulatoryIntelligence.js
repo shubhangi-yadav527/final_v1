@@ -16,14 +16,35 @@ export default function RegulatoryIntelligence() {
 
   const filterSeverity = location.state?.filterSeverity || null;
 
-  const [regulations, setRegulations] = useState([]);
-  const [totalRegulations, setTotalRegulations] = useState(0);
+  const [regulations, setRegulations] = useState(() => {
+    try {
+      const cached = localStorage.getItem('db_regulatory_pulse_regulations');
+      return cached ? JSON.parse(cached) : [];
+    } catch (e) {
+      console.error('Failed to load regulations cache:', e);
+      return [];
+    }
+  });
+  const [totalRegulations, setTotalRegulations] = useState(() => {
+    try {
+      const cached = localStorage.getItem('db_regulatory_pulse_regulations_count');
+      return cached ? parseInt(cached, 10) : 0;
+    } catch (e) {
+      console.error('Failed to load regulations count cache:', e);
+      return 0;
+    }
+  });
 
   useEffect(() => {
     const fetchRegulations = async () => {
       try {
         const res = await axios.get(`${BACKEND_URL}/api/regulations`);
         setRegulations(res.data.regulations);
+        try {
+          localStorage.setItem('db_regulatory_pulse_regulations', JSON.stringify(res.data.regulations));
+        } catch (storageError) {
+          console.warn('Failed to save regulations to cache:', storageError);
+        }
       } catch (error) {
         console.error('Failed to fetch regulations:', error);
       }
@@ -33,6 +54,11 @@ export default function RegulatoryIntelligence() {
       try {
         const res = await axios.get(`${BACKEND_URL}/api/regulations/count`);
         setTotalRegulations(res.data.count);
+        try {
+          localStorage.setItem('db_regulatory_pulse_regulations_count', res.data.count.toString());
+        } catch (storageError) {
+          console.warn('Failed to save regulations count to cache:', storageError);
+        }
       } catch (error) {
         console.error('Failed to fetch regulations count:', error);
       }

@@ -46,17 +46,33 @@ if bigquery is not None:
 else:
     print("google-cloud-bigquery is not installed. Fallback to mock active.")
 
+# In-memory query cache: maps SQL string to (expiry_timestamp, result_list)
+_bq_cache = {}
+BQ_CACHE_TTL = 300  # 5 minutes TTL
+
 def query_bigquery(query_str: str, fallback_data):
+    import time
     if BQ_CLIENT is None:
         return fallback_data
+        
+    now = time.time()
+    if query_str in _bq_cache:
+        cached_time, cached_data = _bq_cache[query_str]
+        if now - cached_time < BQ_CACHE_TTL:
+            print(f"Returning cached BigQuery result (TTL remaining: {int(BQ_CACHE_TTL - (now - cached_time))}s)")
+            return cached_data
+            
     try:
         query_job = BQ_CLIENT.query(query_str)
         results = query_job.result()
         rows = [dict(row) for row in results]
-        return rows if rows else fallback_data
+        res = rows if rows else fallback_data
+        _bq_cache[query_str] = (now, res)
+        return res
     except Exception as e:
         print(f"BigQuery Query Error: {e}. Returning mock fallback.")
         return fallback_data
+
 
 app = FastAPI(
     title="Deutsche Bank Regulatory Pulse API",
@@ -285,8 +301,22 @@ async def get_risk_metrics():
     }
     
     if BQ_TABLE == "eu_regulations":
+        # Dynamically check if column is named RiskType or RiskTypes
+        risk_col = "RiskTypes"
+        if BQ_CLIENT is not None:
+            try:
+                table_ref = BQ_CLIENT.dataset(BQ_DATASET).table(BQ_TABLE)
+                table_obj = BQ_CLIENT.get_table(table_ref)
+                schema_cols = [field.name for field in table_obj.schema]
+                if "RiskType" in schema_cols:
+                    risk_col = "RiskType"
+                elif "RiskTypes" in schema_cols:
+                    risk_col = "RiskTypes"
+            except Exception as e:
+                print(f"Error checking table schema for risk column: {e}")
+
         query_overall = f"SELECT AVG(AIGovernanceScore) as avg_score FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`"
-        query_categories = f"SELECT RiskTypes, AVG(AIGovernanceScore) as avg_score FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` WHERE RiskTypes IS NOT NULL AND RiskTypes != '' GROUP BY RiskTypes"
+        query_categories = f"SELECT {risk_col}, AVG(AIGovernanceScore) as avg_score FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` WHERE {risk_col} IS NOT NULL AND {risk_col} != '' GROUP BY {risk_col}"
         
         overall_res = query_bigquery(query_overall, None)
         categories_res = query_bigquery(query_categories, None)
@@ -294,7 +324,7 @@ async def get_risk_metrics():
         if overall_res and categories_res:
             categories = []
             for r in categories_res:
-                risk_type = r.get("RiskTypes")
+                risk_type = r.get(risk_col)
                 if not risk_type:
                     continue
                 percentage = int(100 - r.get("avg_score", 72))
