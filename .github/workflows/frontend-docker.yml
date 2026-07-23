@@ -1,0 +1,156 @@
+name: frontend-docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Destination environment"
+        default: dev
+        required: false
+        options:
+          - dev
+          - uat
+          - prod
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/regulatoryai/frontend
+  IMAGE_TAG: ${{ github.sha }}
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  quality-gates:
+    name: Frontend quality gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./RegulatoryAI
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: RegulatoryAI/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Format and lint check
+        run: |
+          npx prettier --check "src/**/*.{js,jsx,ts,tsx,css,html}" "public/**/*.{html,css}"
+          npx eslint src --ext .js,.jsx,.ts,.tsx
+
+      - name: Dependency security scan
+        run: npm audit --omit=dev --audit-level=critical
+
+      - name: Unit tests with coverage
+        run: npm test -- --watch=false --coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-quality-reports
+          path: |
+            RegulatoryAI/coverage/
+            RegulatoryAI/junit.xml
+
+  build-and-scan:
+    name: Build and scan frontend image
+    needs: quality-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build frontend image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./RegulatoryAI
+          file: ./RegulatoryAI/Dockerfile.frontend
+          push: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          outputs: type=docker,dest=/tmp/frontend-image.tar
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          input: /tmp/frontend-image.tar
+          format: table
+          exit-code: 1
+          severity: CRITICAL
+          ignore-unfixed: true
+
+      - name: Push frontend image
+        if: github.event_name != 'pull_request'
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./RegulatoryAI
+          file: ./RegulatoryAI/Dockerfile.frontend
+          push: true
+          provenance: mode=max
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Job summary
+        run: |
+          echo "## Frontend container image" >> "$GITHUB_STEP_SUMMARY"
+          echo "### - Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Scan policy: fail on CRITICAL vulnerabilities" >> "$GITHUB_STEP_SUMMARY"
+
+  integration-tests:
+    name: Frontend integration smoke test
+    needs: build-and-scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Run container locally
+        run: |
+          docker run -d --name frontend-smoke -p 3000:3000 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          for i in {1..20}; do
+            curl -sf http://127.0.0.1:3000 && break
+            sleep 3
+          done
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f frontend-smoke || true
